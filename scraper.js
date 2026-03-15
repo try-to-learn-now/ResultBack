@@ -3,7 +3,7 @@ const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
 
-const BASE_URL = "https://results.beup.ac.in/ResultsBTech2ndSem2024_B2023Pub.aspx";
+const BASE_URL = "http://results.beup.ac.in/ResultsBTech2ndSem2024_B2023Pub.aspx";
 
 const FILES = {
   input: path.join(__dirname, "college_branch_start_regno_2023_updated.txt"),
@@ -15,26 +15,24 @@ const FILES = {
 
 const SETTINGS = {
   sem: "II",
-  requestTimeoutMs: 20000,
-  politeDelayMs: 900,
+  requestTimeoutMs: 60000,
+  politeDelayMs: 1500,
   maxRetries: 3,
-  initialRetryDelayMs: 1200,
+  initialRetryDelayMs: 1500,
 
-  // Scan design
   startRoll: 1,
   softCheckpoint60: 65,
   hardUpperLimit: 135,
   stopAfterMissesPast60: 5,
   stopAfterMissesAnytime: 8,
 
-  // GitHub runner safety
   maxRuntimeMs: 5 * 60 * 60 * 1000, // 5 hours
 };
 
 function log(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
   console.log(line);
-  fs.appendFileSync(FILES.log, line + "\n");
+  fs.appendFileSync(FILES.log, line + "\n", "utf8");
 }
 
 function ensureFile(filePath, defaultContent = "") {
@@ -44,7 +42,11 @@ function ensureFile(filePath, defaultContent = "") {
 }
 
 function loadState() {
-  ensureFile(FILES.state, JSON.stringify({ lineIndex: 0, rollIndex: 1 }, null, 2));
+  ensureFile(
+    FILES.state,
+    JSON.stringify({ lineIndex: 0, rollIndex: 1, updatedAt: new Date().toISOString() }, null, 2)
+  );
+
   try {
     return JSON.parse(fs.readFileSync(FILES.state, "utf8"));
   } catch {
@@ -86,7 +88,7 @@ function isBackPaper(grade, ese) {
   return g === "F" || g === "I" || g === "X" || e === "AB";
 }
 
-async function sleep(ms) {
+function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -94,18 +96,23 @@ async function fetchWithRetries(url, maxRetries = SETTINGS.maxRetries, initialDe
   let delay = initialDelay;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const started = Date.now();
+
     try {
       const response = await axios.get(url, {
         timeout: SETTINGS.requestTimeoutMs,
+        maxRedirects: 5,
         headers: {
           "User-Agent": "Mozilla/5.0",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
           "Connection": "keep-alive",
         },
-        maxRedirects: 5,
         validateStatus: status => status >= 200 && status < 400,
       });
+
+      const ms = Date.now() - started;
+      log(`FETCH ${attempt}/${maxRetries} ${url} :: status=${response.status} :: ${ms}ms`);
 
       if (
         response.status === 200 &&
@@ -117,12 +124,13 @@ async function fetchWithRetries(url, maxRetries = SETTINGS.maxRetries, initialDe
 
       return null;
     } catch (error) {
+      const ms = Date.now() - started;
+      log(`WARN fetch retry ${attempt}/${maxRetries} for ${url} :: ${ms}ms :: ${error.message}`);
+
       if (attempt === maxRetries) {
-        log(`ERROR fetch failed after ${maxRetries} attempts: ${url} :: ${error.message}`);
         return null;
       }
 
-      log(`WARN fetch retry ${attempt}/${maxRetries} for ${url} :: ${error.message}`);
       await sleep(delay);
       delay *= 2;
     }
@@ -146,8 +154,16 @@ function extractCurCgpa($) {
   return curCgpa;
 }
 
+function extractSgpa($) {
+  return normalizeText($("#ContentPlaceHolder1_DataList5_GROSSTHEORYTOTALLabel_0").text()) || "N/A";
+}
+
 function extractStudentName($) {
   return normalizeText($("#ContentPlaceHolder1_DataList1_StudentNameLabel_0").text()) || "Unknown";
+}
+
+function extractPublishDate($) {
+  return normalizeText($("#ContentPlaceHolder1_DataList3 tr:nth-of-type(2) td").text().split(":").pop()) || "N/A";
 }
 
 function collectBackSubjects($, gridSelector, practical = false) {
@@ -201,10 +217,8 @@ function parseAndFilterData(html, regNo, collegeCode, collegeName, branchCode, b
   }
 
   const studentName = extractStudentName($);
-  const sgpa = normalizeText($("#ContentPlaceHolder1_DataList5_GROSSTHEORYTOTALLabel_0").text()) || "N/A";
-  const publishDate = normalizeText(
-    $("#ContentPlaceHolder1_DataList3 tr:nth-of-type(2) td").text().split(":").pop()
-  ) || "N/A";
+  const sgpa = extractSgpa($);
+  const publishDate = extractPublishDate($);
 
   const backNames = allBacks.map(s => s.subject_name);
   const backCodes = allBacks.map(s => s.subject_code);
@@ -257,11 +271,10 @@ async function runMassiveScrape() {
   const seen = loadSeenSet();
   const rows = loadBranchRows();
   const state = loadState();
+  const startedAt = Date.now();
 
   log(`Loaded ${rows.length} college-branch rows`);
   log(`Resuming from lineIndex=${state.lineIndex}, rollIndex=${state.rollIndex}`);
-
-  const startedAt = Date.now();
 
   for (let i = state.lineIndex; i < rows.length; i++) {
     const row = rows[i];
@@ -289,12 +302,12 @@ async function runMassiveScrape() {
         log(`MISS ${currentRegNo} (miss=${consecutiveMisses})`);
 
         if (r >= SETTINGS.softCheckpoint60 && consecutiveMisses >= SETTINGS.stopAfterMissesPast60) {
-          log(`BREAK likely end of ${row.branchName} around 60-seat boundary`);
+          log(`BREAK likely 60-seat branch end :: ${row.collegeName} :: ${row.branchName}`);
           break;
         }
 
         if (consecutiveMisses >= SETTINGS.stopAfterMissesAnytime) {
-          log(`BREAK likely end of branch after repeated misses`);
+          log(`BREAK repeated misses :: ${row.collegeName} :: ${row.branchName}`);
           break;
         }
       } else {
@@ -319,7 +332,7 @@ async function runMassiveScrape() {
             log(`SKIP duplicate ${currentRegNo}`);
           }
         } else {
-          log(`IGNORE ${currentRegNo} (pass student / CGPA<5 / no back)`);
+          log(`IGNORE ${currentRegNo} (pass / cgpa<5 / no back)`);
         }
       }
 
