@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "0 */6 * * *"
 
+concurrency:
+  group: beu-auto-scraper
+  cancel-in-progress: false
+
 jobs:
   scrape-data:
     runs-on: windows-2025
@@ -25,32 +29,30 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Show input files
+      - name: Ensure base files exist
         shell: pwsh
         run: |
-          Get-ChildItem
-          if (!(Test-Path "college_branch_start_regno_2023_updated.txt")) {
-            Write-Error "Missing college_branch_start_regno_2023_updated.txt"
-            exit 1
-          }
+          if (!(Test-Path "state.json")) { '{"lineIndex":0,"rollIndex":1}' | Out-File -Encoding utf8 state.json }
+          if (!(Test-Path "seen.txt")) { New-Item -ItemType File seen.txt | Out-Null }
+          if (!(Test-Path "failed_regnos.txt")) { New-Item -ItemType File failed_regnos.txt | Out-Null }
+          if (!(Test-Path "result_students.txt")) { "reg_no | back_codes | back_names" | Out-File -Encoding utf8 result_students.txt }
+          if (!(Test-Path "run.log")) { New-Item -ItemType File run.log | Out-Null }
 
       - name: Run scraper
+        id: scrape
+        continue-on-error: true
         shell: pwsh
         run: |
           node scraper.js
 
       - name: Commit and push progress
+        if: always()
         shell: pwsh
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          if (!(Test-Path "state.json")) { New-Item -Path "state.json" -ItemType File | Out-Null }
-          if (!(Test-Path "seen.txt")) { New-Item -Path "seen.txt" -ItemType File | Out-Null }
-          if (!(Test-Path "back_students.txt")) { New-Item -Path "back_students.txt" -ItemType File | Out-Null }
-          if (!(Test-Path "run.log")) { New-Item -Path "run.log" -ItemType File | Out-Null }
-
-          git add state.json seen.txt back_students.txt run.log
+          git add state.json seen.txt failed_regnos.txt result_students.txt run.log
 
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
@@ -60,3 +62,9 @@ jobs:
 
           git commit -m "Auto-update: scraper progress"
           git push
+
+      - name: Fail workflow if scraper failed
+        if: steps.scrape.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Error "Scraper step failed. Progress was still committed."
