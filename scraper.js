@@ -6,7 +6,7 @@ const path = require("path");
 const BASE_URL = "http://results.beup.ac.in/ResultsBTech2ndSem2024_B2023Pub.aspx";
 
 const FILES = {
-  input: path.join(__dirname, "college_branch_start_regno_2023_updated.txt"),
+  input: path.join(__dirname, "college_branch_start_regno_2022_updated.txt"),
   state: path.join(__dirname, "state.json"),
   seen: path.join(__dirname, "seen.txt"),
   failed: path.join(__dirname, "failed_regnos.txt"),
