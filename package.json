@@ -1,0 +1,13 @@
+{
+  "name": "beu-auto-scraper",
+  "version": "1.0.0",
+  "description": "BEU backpaper scraper",
+  "main": "scraper.js",
+  "scripts": {
+    "start": "node scraper.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "cheerio": "^1.0.0"
+  }
+}
