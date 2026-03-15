@@ -1,4 +1,4 @@
-name: BEU Auto Scraper Relay
+name: BEU 2022 Auto Scraper Relay
 
 on:
   workflow_dispatch:
